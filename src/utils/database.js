@@ -5,47 +5,51 @@ let pool;
 
 /**
  * Initialize database connection pool
- * Supports:
- * - Local development (DB_HOST, DB_USER, etc.)
- * - Production (Render DATABASE_URL)
+ * - Uses DATABASE_URL in production (Render)
+ * - Uses individual DB_* vars in local development
  */
 const initializePool = () => {
-	if (!pool) {
-		// If DATABASE_URL exists (Render / Production)
-		if (process.env.DATABASE_URL) {
-			pool = new Pool({
-				connectionString: process.env.DATABASE_URL,
-				ssl: {
-					rejectUnauthorized: false, // required for Render
-				},
-				max: 20,
-				idleTimeoutMillis: 30000,
-				connectionTimeoutMillis: 2000,
-			});
-		} 
-		// Else use local DB credentials
-		else {
-			pool = new Pool({
-				host: process.env.DB_HOST,
-				port: process.env.DB_PORT,
-				database: process.env.DB_NAME,
-				user: process.env.DB_USER,
-				password: process.env.DB_PASSWORD,
-				max: 20,
-				idleTimeoutMillis: 30000,
-				connectionTimeoutMillis: 2000,
-			});
-		}
+	if (pool) return pool;
 
-		pool.on("error", (err) => {
-			logger.critical("Unexpected error on idle client", err);
+	// ✅ PRODUCTION (Render)
+	if (process.env.DATABASE_URL) {
+		logger.verbose("Using DATABASE_URL for PostgreSQL connection");
+
+		pool = new Pool({
+			connectionString: process.env.DATABASE_URL,
+			ssl: {
+				rejectUnauthorized: false, // REQUIRED for Render
+			},
+			max: 10,
+			idleTimeoutMillis: 30000,
+			connectionTimeoutMillis: 5000,
 		});
 	}
+	// ✅ LOCAL DEVELOPMENT
+	else {
+		logger.verbose("Using local PostgreSQL connection");
+
+		pool = new Pool({
+			host: process.env.DB_HOST,
+			port: process.env.DB_PORT,
+			database: process.env.DB_NAME,
+			user: process.env.DB_USER,
+			password: process.env.DB_PASSWORD,
+			max: 10,
+			idleTimeoutMillis: 30000,
+			connectionTimeoutMillis: 5000,
+		});
+	}
+
+	pool.on("error", (err) => {
+		logger.critical("Unexpected PostgreSQL error", err);
+	});
+
 	return pool;
 };
 
 /**
- * Connect to the database and test connection
+ * Test DB connection
  */
 const connectDB = async () => {
 	try {
@@ -54,13 +58,13 @@ const connectDB = async () => {
 		logger.verbose("Connected to PostgreSQL database");
 		client.release();
 	} catch (error) {
-		logger.critical("Failed to connect to database:", error);
+		logger.critical("Failed to connect to database", error);
 		throw error;
 	}
 };
 
 /**
- * Execute a database query
+ * Run query
  */
 const query = async (text, params = []) => {
 	const dbPool = initializePool();
@@ -68,21 +72,20 @@ const query = async (text, params = []) => {
 
 	try {
 		const result = await dbPool.query(text, params);
-		const duration = Date.now() - start;
 		logger.verbose("Executed query", {
 			text,
-			duration,
+			duration: Date.now() - start,
 			rows: result.rowCount,
 		});
 		return result;
 	} catch (error) {
-		logger.critical("Database query error:", error);
+		logger.critical("Database query error", error);
 		throw error;
 	}
 };
 
 /**
- * Get a database client for transactions
+ * Get client for transactions
  */
 const getClient = async () => {
 	const dbPool = initializePool();
